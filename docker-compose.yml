@@ -1,0 +1,16 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: sluice
+      POSTGRES_PASSWORD: sluice
+      POSTGRES_DB: sluice
+    ports:
+      - "5433:5432"
+    volumes:
+      - ./migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sluice"]
+      interval: 2s
+      timeout: 2s
+      retries: 15

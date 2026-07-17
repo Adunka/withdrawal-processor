@@ -1,0 +1,70 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  fast:
+    # The whole failure matrix on a bare interpreter - no services, no deps.
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+      # The test tooling is stdlib-only, but the API layer under test is a
+      # flask app - the app's own runtime dependency has to be present.
+      - run: pip install flask
+      - run: python -m unittest discover -s tests -t . -v
+
+  chaos-sweep:
+    # Same suite, but the chaos test gets five extra universes to survive.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: chaos with rotating seeds
+        run: |
+          for seed in 1 42 31337 $(date +%s) $RANDOM; do
+            echo "=== seed $seed ==="
+            SLUICE_CHAOS_SEED=$seed python -m unittest tests.test_chaos
+          done
+
+  postgres:
+    # DB-level guarantees: SKIP LOCKED, the transition trigger, ON CONFLICT.
+    runs-on: ubuntu-latest
+    services:
+      db:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: sluice
+          POSTGRES_PASSWORD: sluice
+          POSTGRES_DB: sluice
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U sluice"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: pip install "psycopg[binary]>=3.1" "psycopg-pool>=3.2"
+      - name: apply schema
+        run: psql postgresql://sluice:sluice@localhost:5432/sluice -f migrations/001_schema.sql
+        env:
+          PGPASSWORD: sluice
+      - name: pg tier
+        run: python -m unittest discover -s tests/pg -t . -v
+        env:
+          DATABASE_URL: postgresql://sluice:sluice@localhost:5432/sluice
